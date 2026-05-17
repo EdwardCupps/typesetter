@@ -36,7 +36,7 @@ const createWindow = () => {
 app.on('ready', () => {
   // Grant Font Access API permission automatically — required for queryLocalFonts()
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
-    callback(permission === 'localFonts');
+    callback((permission as string) === 'localFonts');
   });
   createWindow();
 });
