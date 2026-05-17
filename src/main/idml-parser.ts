@@ -52,6 +52,8 @@ export async function parseIDML(idmlPath: string): Promise<ParsedDocument> {
     parseAttributeValue: true,
     textNodeName: '#text',
     trimValues: false,
+    // Force Content to always be an array (Br is preprocessed into Content before parsing)
+    isArray: (name) => name === 'Content' || name === 'Br',
   });
 
   async function readXml(filePath: string): Promise<Record<string, unknown>> {
@@ -122,6 +124,8 @@ export async function parseIDML(idmlPath: string): Promise<ParsedDocument> {
 
       const prev = String(frame['@_PreviousTextFrame']);
       const next = String(frame['@_NextTextFrame']);
+      const columnCount = frame['@_TextColumnCount'] != null ? Number(frame['@_TextColumnCount']) : 1;
+      const columnGutter = frame['@_TextColumnGutter'] != null ? Number(frame['@_TextColumnGutter']) : 0;
 
       frames.push({
         id: String(frame['@_Self']),
@@ -133,6 +137,8 @@ export async function parseIDML(idmlPath: string): Promise<ParsedDocument> {
         width: round2(maxX - minX),
         height: round2(maxY - minY),
         spreadId,
+        columnCount,
+        columnGutter: round2(columnGutter),
       });
     }
   }
@@ -145,7 +151,13 @@ export async function parseIDML(idmlPath: string): Promise<ParsedDocument> {
   const fontsUsed = new Set<string>();
 
   for (const sf of storyFiles) {
-    const raw = await readXml(sf);
+    const storyFile = zip.file(sf);
+    if (!storyFile) throw new Error(`Missing in IDML archive: ${sf}`);
+    // Normalize <Br /> → <Content>\n</Content> before parsing so the Content
+    // array captures line breaks in document order, regardless of whether Br
+    // appears before or after Content within a CharacterStyleRange.
+    const storyXml = (await storyFile.async('string')).replace(/<Br\s*\/>/g, '<Content>\n</Content>');
+    const raw = xmlParser.parse(storyXml) as Record<string, unknown>;
     const storyWrapper = raw['idPkg:Story'] as Record<string, unknown>;
     const story = storyWrapper['Story'] as Record<string, unknown>;
     const storyId = String(story['@_Self']);
@@ -155,6 +167,9 @@ export async function parseIDML(idmlPath: string): Promise<ParsedDocument> {
     for (const para of toArray(story['ParagraphStyleRange'] as Record<string, unknown>)) {
       const styleAttr = String(para['@_AppliedParagraphStyle']);
       const paragraphStyle = styleAttr.replace(/^ParagraphStyle\/(\$ID\/)?/, '');
+      const justification = para['@_Justification'] ? String(para['@_Justification']) : undefined;
+      const leftIndent = para['@_LeftIndent'] != null ? Number(para['@_LeftIndent']) : undefined;
+      const firstLineIndent = para['@_FirstLineIndent'] != null ? Number(para['@_FirstLineIndent']) : undefined;
 
       let text = '';
       const kerningPairs: ContentBlock['kerningPairs'] = [];
@@ -168,12 +183,11 @@ export async function parseIDML(idmlPath: string): Promise<ParsedDocument> {
           kerningPairs.push({ index: startIdx, value: Number(kv) });
         }
 
-        const rawContent = cr['Content'];
-        const chunk =
-          rawContent == null ? '' :
-          typeof rawContent === 'object' ? textOf(rawContent) :
-          String(rawContent);
-        text += chunk;
+        // <Br /> was normalized to <Content>\n</Content> before parsing,
+        // so Content already contains line breaks in correct document order.
+        const contentParts = (cr['Content'] as unknown[] | undefined ?? [])
+          .map(v => textOf(v).replace(/\r/g, '\n'));
+        text += contentParts.join('');
 
         const endIdx = text.length;
 
@@ -199,7 +213,7 @@ export async function parseIDML(idmlPath: string): Promise<ParsedDocument> {
       }
 
       if (text.trim()) {
-        content.push({ text, paragraphStyle, kerningPairs, charRuns });
+        content.push({ text, paragraphStyle, justification, leftIndent, firstLineIndent, kerningPairs, charRuns });
       }
     }
 

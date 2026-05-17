@@ -19,6 +19,9 @@ export interface CharRun {
 export interface ContentBlock {
   text: string;
   paragraphStyle: string;
+  justification?: string;
+  leftIndent?: number;      // pt
+  firstLineIndent?: number; // pt (negative = hanging)
   kerningPairs: KerningPair[];
   charRuns: CharRun[];
 }
@@ -40,13 +43,13 @@ export interface Frame {
   storyId: string;
   previousFrame: string | null;
   nextFrame: string | null;
-  // Coordinates in spread space (page-local correction is a TODO for the
-  // layout engine — requires subtracting each page's ItemTransform offset)
   x: number;
   y: number;
   width: number;
   height: number;
   spreadId: string;
+  columnCount: number;   // InDesign TextColumnCount (default 1)
+  columnGutter: number;  // pt between columns (default 0)
 }
 
 export interface Story {

@@ -20,18 +20,33 @@ function charRunStyle(block: ContentBlock, charIndex: number): React.CSSProperti
   return style;
 }
 
+function justificationToTextAlign(j: string | undefined): React.CSSProperties['textAlign'] {
+  switch (j) {
+    case 'FullyJustified': return 'justify';
+    case 'RightJustified': return 'right';
+    case 'CenterJustified': return 'center';
+    default: return 'left';
+  }
+}
+
 function ParagraphBlock({ block }: { block: ContentBlock }) {
   const firstRun = block.charRuns[0];
 
-  // Paragraph-level defaults from the dominant (first) run
+  // Paragraph-level defaults from the dominant (first) run.
+  // Tracking is per-character only — never inherit it at the paragraph level
+  // or it contaminates spans that don't set their own letterSpacing.
   const paraStyle: React.CSSProperties = {
     margin: 0,
+    marginTop: 0,
+    marginBottom: 0,
     padding: 0,
     whiteSpace: 'pre-wrap',
+    textAlign: justificationToTextAlign(block.justification),
+    paddingLeft: block.leftIndent ? pt(block.leftIndent) : undefined,
+    textIndent: block.firstLineIndent ? pt(block.firstLineIndent) : undefined,
     fontFamily: firstRun?.fontFamily ? `'${firstRun.fontFamily}'` : undefined,
     fontSize: firstRun?.fontSize ? pt(firstRun.fontSize) : undefined,
     lineHeight: firstRun?.leading ? pt(firstRun.leading) : undefined,
-    letterSpacing: firstRun?.tracking ? `${firstRun.tracking / 1000}em` : undefined,
   };
 
   // Build a kerning map: charIndex → kern value (thousandths of em)
@@ -95,6 +110,7 @@ function FrameView({
   localY: number;
   story: Story;
 }) {
+  const cols = frame.columnCount > 1 ? frame.columnCount : undefined;
   return (
     <div style={{
       position: 'absolute',
@@ -102,8 +118,9 @@ function FrameView({
       top: pt(localY),
       width: pt(frame.width),
       height: pt(frame.height),
-      overflow: 'hidden',
+      overflow: 'visible',
       boxSizing: 'border-box',
+      ...(cols ? { columnCount: cols, columnGap: pt(frame.columnGutter) } : {}),
     }}>
       {story.content.map((block, i) => (
         <ParagraphBlock key={i} block={block} />
