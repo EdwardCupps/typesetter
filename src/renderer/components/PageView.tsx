@@ -48,6 +48,7 @@ function ParagraphBlock({
     padding: 0,
     whiteSpace: 'pre-wrap',
     textAlign: justificationToTextAlign(block.justification),
+    textAlignLast: block.justification === 'FullyJustified' ? 'justify' : undefined,
     paddingLeft: block.leftIndent ? pt(block.leftIndent) : undefined,
     textIndent: block.firstLineIndent ? pt(block.firstLineIndent) : undefined,
     fontFamily: firstRun?.fontFamily ? `'${firstRun.fontFamily}'` : undefined,
