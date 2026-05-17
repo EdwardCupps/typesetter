@@ -83,6 +83,7 @@ export async function parseIDML(idmlPath: string): Promise<ParsedDocument> {
     for (const page of toArray(spread['Page'] as Record<string, unknown>)) {
       const bounds = parseBounds(String(page['@_GeometricBounds']));
       const mp = page['MarginPreference'] as Record<string, unknown>;
+      const t = parseTransform(String(page['@_ItemTransform']));
       pages.push({
         id: String(page['@_Self']),
         spreadId,
@@ -95,6 +96,7 @@ export async function parseIDML(idmlPath: string): Promise<ParsedDocument> {
           bottom: round2(Number(mp['@_Bottom'])),
           left: round2(Number(mp['@_Left'])),
         },
+        transform: { tx: round2(t.tx), ty: round2(t.ty) },
       });
     }
 

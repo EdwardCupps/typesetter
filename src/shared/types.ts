@@ -30,6 +30,9 @@ export interface Page {
   width: number;   // pt
   height: number;  // pt
   margins: { top: number; right: number; bottom: number; left: number };
+  // Spread-space offset of this page's origin — subtract from frame coords
+  // to get page-local coordinates.
+  transform: { tx: number; ty: number };
 }
 
 export interface Frame {
