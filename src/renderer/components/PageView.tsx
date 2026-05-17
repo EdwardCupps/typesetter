@@ -29,7 +29,13 @@ function justificationToTextAlign(j: string | undefined): React.CSSProperties['t
   }
 }
 
-function ParagraphBlock({ block }: { block: ContentBlock }) {
+function ParagraphBlock({
+  block, isSelected, onSelect,
+}: {
+  block: ContentBlock;
+  isSelected: boolean;
+  onSelect: () => void;
+}) {
   const firstRun = block.charRuns[0];
 
   // Paragraph-level defaults from the dominant (first) run.
@@ -47,6 +53,9 @@ function ParagraphBlock({ block }: { block: ContentBlock }) {
     fontFamily: firstRun?.fontFamily ? `'${firstRun.fontFamily}'` : undefined,
     fontSize: firstRun?.fontSize ? pt(firstRun.fontSize) : undefined,
     lineHeight: firstRun?.leading ? pt(firstRun.leading) : undefined,
+    cursor: 'default',
+    outline: isSelected ? '1px solid rgba(74,158,255,0.5)' : 'none',
+    outlineOffset: '1px',
   };
 
   // Build a kerning map: charIndex → kern value (thousandths of em)
@@ -92,7 +101,7 @@ function ParagraphBlock({ block }: { block: ContentBlock }) {
   }
 
   return (
-    <p style={paraStyle}>
+    <p style={paraStyle} onClick={e => { e.stopPropagation(); onSelect(); }}>
       {segments.map((seg, i) => (
         <span key={i} style={seg.style}>{seg.text}</span>
       ))}
@@ -102,13 +111,17 @@ function ParagraphBlock({ block }: { block: ContentBlock }) {
 
 // ---- frame ------------------------------------------------------------------
 
+type Selection = { storyId: string; blockIndex: number } | null;
+
 function FrameView({
-  frame, localX, localY, story,
+  frame, localX, localY, story, selection, onSelect,
 }: {
   frame: Frame;
   localX: number;
   localY: number;
   story: Story;
+  selection: Selection;
+  onSelect: (storyId: string, blockIndex: number) => void;
 }) {
   const cols = frame.columnCount > 1 ? frame.columnCount : undefined;
   return (
@@ -123,7 +136,12 @@ function FrameView({
       ...(cols ? { columnCount: cols, columnGap: pt(frame.columnGutter) } : {}),
     }}>
       {story.content.map((block, i) => (
-        <ParagraphBlock key={i} block={block} />
+        <ParagraphBlock
+          key={i}
+          block={block}
+          isSelected={selection?.storyId === story.id && selection?.blockIndex === i}
+          onSelect={() => onSelect(story.id, i)}
+        />
       ))}
     </div>
   );
@@ -132,23 +150,28 @@ function FrameView({
 // ---- page -------------------------------------------------------------------
 
 export function PageView({
-  page, frames, stories,
+  page, frames, stories, selection, onSelect,
 }: {
   page: Page;
   frames: Frame[];
   stories: Story[];
+  selection: Selection;
+  onSelect: (storyId: string, blockIndex: number) => void;
 }) {
   const pageFrames = frames.filter(f => f.spreadId === page.spreadId);
 
   return (
-    <div style={{
-      position: 'relative',
-      width: pt(page.width),
-      height: pt(page.height),
-      background: '#fff',
-      boxShadow: '0 4px 24px rgba(0,0,0,0.35)',
-      flexShrink: 0,
-    }}>
+    <div
+      style={{
+        position: 'relative',
+        width: pt(page.width),
+        height: pt(page.height),
+        background: '#fff',
+        boxShadow: '0 4px 24px rgba(0,0,0,0.35)',
+        flexShrink: 0,
+      }}
+      onClick={() => onSelect('', -1)}
+    >
       {/* Margin guide */}
       <div style={{
         position: 'absolute',
@@ -172,6 +195,8 @@ export function PageView({
             localX={localX}
             localY={localY}
             story={story}
+            selection={selection}
+            onSelect={onSelect}
           />
         );
       })}
