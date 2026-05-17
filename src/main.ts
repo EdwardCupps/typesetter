@@ -1,4 +1,5 @@
 import { app, BrowserWindow, session } from 'electron';
+import { registerHandlers } from './main/ipc-handlers';
 import path from 'node:path';
 import started from 'electron-squirrel-startup';
 
@@ -38,6 +39,7 @@ app.on('ready', () => {
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback((permission as string) === 'localFonts');
   });
+  registerHandlers();
   createWindow();
 });
 
