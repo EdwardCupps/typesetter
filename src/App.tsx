@@ -40,13 +40,13 @@ export default function App() {
     });
   }
 
-  function handleCharRunChange(update: Partial<CharRun>) {
+  function handleCharRunChange(update: Partial<CharRun>, refRun?: CharRun) {
     if (!selection || !doc) return;
     const block = doc.stories.find(s => s.id === selection.storyId)?.content[selection.blockIndex];
     if (!block) return;
-    // Only update runs that share the same font family + size as the first run,
-    // so edits to the name don't bleed into subtitle/contact runs within the same block.
-    const ref = block.charRuns[0];
+    // Only update runs that share the same font family + size as the reference run
+    // (caller supplies the focused segment's run; falls back to charRuns[0]).
+    const ref = refRun ?? block.charRuns[0];
     setDoc(prev => {
       if (!prev) return prev;
       return {
