@@ -5,14 +5,12 @@ import { PropertiesPanel } from './renderer/components/PropertiesPanel';
 
 type Selection = { storyId: string; blockIndex: number } | null;
 
-// Adjust charRun boundaries and kerning pairs after a text edit, preserving
-// per-segment styling. Diffs old vs new text to find the changed region, then
-// shifts run boundaries accordingly.
+// ---- text edit helpers ------------------------------------------------------
+
 function applyTextEdit(block: ContentBlock, newText: string): ContentBlock {
   const oldText = block.text;
   if (oldText === newText) return block;
 
-  // Find longest common prefix and suffix to locate the changed region.
   let pre = 0;
   while (pre < oldText.length && pre < newText.length && oldText[pre] === newText[pre]) pre++;
 
@@ -21,7 +19,7 @@ function applyTextEdit(block: ContentBlock, newText: string): ContentBlock {
   while (suf < maxSuf && oldText[oldText.length - 1 - suf] === newText[newText.length - 1 - suf]) suf++;
 
   const delStart = pre;
-  const delEnd = oldText.length - suf;   // exclusive end of deleted region
+  const delEnd = oldText.length - suf;
   const insertLen = newText.length - pre - suf;
   const delta = insertLen - (delEnd - delStart);
 
@@ -39,8 +37,6 @@ function applyTextEdit(block: ContentBlock, newText: string): ContentBlock {
     })
     .filter((r): r is CharRun => r !== null);
 
-  // If text remains but all runs were collapsed, extend the last surviving run
-  // (or clone the first) to cover the full new text.
   if (newText.length > 0 && newRuns.length === 0) {
     const proto = block.charRuns[0] ?? { start: 0, end: 0 };
     newRuns.push({ ...proto, start: 0, end: newText.length });
@@ -60,16 +56,45 @@ function applyTextEdit(block: ContentBlock, newText: string): ContentBlock {
   return { ...block, text: newText, charRuns: newRuns, kerningPairs: newKerning };
 }
 
+// Apply a style update to charRuns that overlap [selStart, selEnd).
+// Runs that partially overlap are split at the selection boundary.
+function applyStyleToRange(
+  block: ContentBlock,
+  selStart: number,
+  selEnd: number,
+  update: Partial<CharRun>,
+): ContentBlock {
+  if (selStart >= selEnd) return block;
+  const newRuns: CharRun[] = [];
+  for (const run of block.charRuns) {
+    if (run.end <= selStart || run.start >= selEnd) {
+      newRuns.push(run);
+      continue;
+    }
+    if (run.start < selStart) newRuns.push({ ...run, end: selStart });
+    const s = Math.max(run.start, selStart);
+    const e = Math.min(run.end, selEnd);
+    newRuns.push({ ...run, start: s, end: e, ...update });
+    if (run.end > selEnd) newRuns.push({ ...run, start: selEnd });
+  }
+  return { ...block, charRuns: newRuns };
+}
+
+// ---- app --------------------------------------------------------------------
+
 export default function App() {
   const [doc, setDoc] = useState<ParsedDocument | null>(null);
   const [loading, setLoading] = useState(false);
   const [selection, setSelection] = useState<Selection>(null);
   const [editing, setEditing] = useState<Selection>(null);
+  // Char range of the current text selection within the editing block.
+  const [editSel, setEditSel] = useState<{ start: number; end: number } | null>(null);
 
   async function handleImport() {
     setLoading(true);
     setSelection(null);
     setEditing(null);
+    setEditSel(null);
     try {
       const result = await window.typesetter.idml.parse();
       setDoc(result);
@@ -82,6 +107,7 @@ export default function App() {
     if (blockIndex === -1) {
       setSelection(null);
       setEditing(null);
+      setEditSel(null);
     } else {
       setSelection({ storyId, blockIndex });
     }
@@ -90,6 +116,11 @@ export default function App() {
   function handleStartEdit(storyId: string, blockIndex: number) {
     setSelection({ storyId, blockIndex });
     setEditing({ storyId, blockIndex });
+    setEditSel(null);
+  }
+
+  function handleSelectionChange(start: number, end: number) {
+    setEditSel({ start, end });
   }
 
   function handleTextChange(newText: string) {
@@ -101,12 +132,7 @@ export default function App() {
         ...prev,
         stories: prev.stories.map(s =>
           s.id === storyId
-            ? {
-                ...s,
-                content: s.content.map((b, i) =>
-                  i === blockIndex ? applyTextEdit(b, newText) : b
-                ),
-              }
+            ? { ...s, content: s.content.map((b, i) => i === blockIndex ? applyTextEdit(b, newText) : b) }
             : s
         ),
       };
@@ -115,6 +141,7 @@ export default function App() {
 
   function handleEndEdit() {
     setEditing(null);
+    setEditSel(null);
   }
 
   function handleBlockChange(update: Partial<ContentBlock>) {
@@ -134,29 +161,32 @@ export default function App() {
 
   function handleCharRunChange(update: Partial<CharRun>, refRun?: CharRun) {
     if (!selection || !doc) return;
-    const block = doc.stories.find(s => s.id === selection.storyId)?.content[selection.blockIndex];
-    if (!block) return;
-    const ref = refRun ?? block.charRuns[0];
+    const { storyId, blockIndex } = selection;
     setDoc(prev => {
       if (!prev) return prev;
       return {
         ...prev,
         stories: prev.stories.map(s =>
-          s.id === selection.storyId
+          s.id === storyId
             ? {
                 ...s,
-                content: s.content.map((b, i) =>
-                  i === selection.blockIndex
-                    ? {
-                        ...b,
-                        charRuns: b.charRuns.map(r =>
-                          r.fontSize === ref?.fontSize && r.fontFamily === ref?.fontFamily
-                            ? { ...r, ...update }
-                            : r
-                        ),
-                      }
-                    : b
-                ),
+                content: s.content.map((b, i) => {
+                  if (i !== blockIndex) return b;
+                  // If there's a real text selection, apply to that range.
+                  if (editSel && editSel.start < editSel.end) {
+                    return applyStyleToRange(b, editSel.start, editSel.end, update);
+                  }
+                  // Otherwise apply to all runs matching the reference run's font+size.
+                  const ref = refRun ?? b.charRuns[0];
+                  return {
+                    ...b,
+                    charRuns: b.charRuns.map(r =>
+                      r.fontSize === ref?.fontSize && r.fontFamily === ref?.fontFamily
+                        ? { ...r, ...update }
+                        : r
+                    ),
+                  };
+                }),
               }
             : s
         ),
@@ -167,6 +197,9 @@ export default function App() {
   const selectedBlock = selection && doc
     ? (doc.stories.find(s => s.id === selection.storyId)?.content[selection.blockIndex] ?? null)
     : null;
+
+  // The charRun under the text cursor (when editing) drives the panel display.
+  const cursorCharStart = editSel?.start ?? null;
 
   const page1 = doc?.pages[0] ?? null;
 
@@ -201,7 +234,6 @@ export default function App() {
 
       {/* Canvas + panel */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-        {/* Canvas */}
         <div style={{
           flex: 1, overflow: 'auto',
           display: 'flex', justifyContent: 'center',
@@ -216,6 +248,7 @@ export default function App() {
               editing={editing}
               onSelect={handleSelect}
               onStartEdit={handleStartEdit}
+              onSelectionChange={handleSelectionChange}
               onTextChange={handleTextChange}
               onEndEdit={handleEndEdit}
             />
@@ -229,9 +262,9 @@ export default function App() {
           )}
         </div>
 
-        {/* Properties panel */}
         <PropertiesPanel
           block={selectedBlock}
+          cursorCharStart={cursorCharStart}
           onBlockChange={handleBlockChange}
           onCharRunChange={handleCharRunChange}
         />

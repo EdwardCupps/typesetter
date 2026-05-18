@@ -169,11 +169,12 @@ function buildSegments(block: ContentBlock): StyleSegment[] {
 
 interface Props {
   block: ContentBlock | null;
+  cursorCharStart: number | null; // set when a contenteditable is active; drives focused run
   onBlockChange: (update: Partial<ContentBlock>) => void;
   onCharRunChange: (update: Partial<CharRun>, refRun?: CharRun) => void;
 }
 
-export function PropertiesPanel({ block, onBlockChange, onCharRunChange }: Props) {
+export function PropertiesPanel({ block, cursorCharStart, onBlockChange, onCharRunChange }: Props) {
   const [allFonts, setAllFonts] = useState<FontData[]>([]);
   // Stable identity for the current block selection — only resets focused
   // segment when the user clicks a different paragraph, not on every edit.
@@ -200,9 +201,16 @@ export function PropertiesPanel({ block, onBlockChange, onCharRunChange }: Props
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [blockSignature]);
 
-  const focusedSegment =
-    styleSegments.find(s => s.startChar === focusedStart) ?? styleSegments[0];
-  const focusedRun = focusedSegment?.runs[0];
+  // When editing, the cursor position drives the focused run directly.
+  // Otherwise fall back to the segment chip selection.
+  const focusedRun = useMemo(() => {
+    if (cursorCharStart !== null && block) {
+      return block.charRuns.find(r => cursorCharStart >= r.start && cursorCharStart < r.end)
+        ?? block.charRuns[block.charRuns.length - 1];
+    }
+    const seg = styleSegments.find(s => s.startChar === focusedStart) ?? styleSegments[0];
+    return seg?.runs[0];
+  }, [cursorCharStart, block, styleSegments, focusedStart]);
 
   // Variants for the focused run's font family.
   const familyVariants = useMemo(() => {
@@ -227,7 +235,8 @@ export function PropertiesPanel({ block, onBlockChange, onCharRunChange }: Props
     ?? allFonts.find(f => f.family === focusedRun?.fontFamily)
   )?.postscriptName ?? '';
 
-  const multiSegment = styleSegments.length > 1;
+  // Show chips only when not in edit mode (cursor position replaces them during editing).
+  const multiSegment = styleSegments.length > 1 && cursorCharStart === null;
 
   return (
     <div style={{
@@ -279,7 +288,7 @@ export function PropertiesPanel({ block, onBlockChange, onCharRunChange }: Props
           {multiSegment && (
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 8 }}>
               {styleSegments.map(seg => {
-                const active = seg.startChar === focusedSegment?.startChar;
+                const active = seg.startChar === focusedRun?.start || seg.runs.some(r => r === focusedRun);
                 const size = seg.runs[0]?.fontSize;
                 const label = size ? `${size}pt` : seg.preview;
                 return (

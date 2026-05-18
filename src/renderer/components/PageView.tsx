@@ -125,14 +125,23 @@ function justificationToTextAlign(j: string | undefined): React.CSSProperties['t
   }
 }
 
+// Get the character offset of a DOM node+offset relative to a container element.
+function charOffsetOf(container: Node, node: Node, offset: number): number {
+  const range = document.createRange();
+  range.setStart(container, 0);
+  range.setEnd(node, offset);
+  return range.toString().length;
+}
+
 function ParagraphBlock({
-  block, isSelected, isEditing, onSelect, onStartEdit, onTextChange, onEndEdit, fontLookup,
+  block, isSelected, isEditing, onSelect, onStartEdit, onSelectionChange, onTextChange, onEndEdit, fontLookup,
 }: {
   block: ContentBlock;
   isSelected: boolean;
   isEditing: boolean;
   onSelect: () => void;
   onStartEdit: () => void;
+  onSelectionChange: (start: number, end: number) => void;
   onTextChange: (text: string) => void;
   onEndEdit: () => void;
   fontLookup: FontLookup;
@@ -141,19 +150,29 @@ function ParagraphBlock({
   const firstCssFamily = firstRun?.fontFamily
     ? (fontLookup.get(firstRun.fontFamily) ?? firstRun.fontFamily)
     : undefined;
-  const taRef = useRef<HTMLTextAreaElement>(null);
+  const ceRef = useRef<HTMLParagraphElement>(null);
 
+  // Track text selection to drive the properties panel.
   useEffect(() => {
-    if (isEditing && taRef.current) {
-      taRef.current.focus();
-      // Place cursor at end
-      const len = taRef.current.value.length;
-      taRef.current.setSelectionRange(len, len);
+    if (!isEditing) return;
+    function onSelChange() {
+      const sel = window.getSelection();
+      if (!sel || !ceRef.current) return;
+      const anchor = sel.anchorNode;
+      const focus = sel.focusNode;
+      if (!anchor || !ceRef.current.contains(anchor)) return;
+      const a = charOffsetOf(ceRef.current, anchor, sel.anchorOffset);
+      const f = focus && ceRef.current.contains(focus)
+        ? charOffsetOf(ceRef.current, focus, sel.focusOffset)
+        : a;
+      onSelectionChange(Math.min(a, f), Math.max(a, f));
     }
-  }, [isEditing]);
+    document.addEventListener('selectionchange', onSelChange);
+    return () => document.removeEventListener('selectionchange', onSelChange);
+  }, [isEditing, onSelectionChange]);
 
-  // Shared font/layout style used by both the <p> and the editing <textarea>.
-  const baseStyle: React.CSSProperties = {
+  // Shared layout properties (font, size, alignment, indents).
+  const sharedStyle: React.CSSProperties = {
     fontFamily: firstCssFamily ? `'${firstCssFamily}'` : undefined,
     fontSize: firstRun?.fontSize ? pt(firstRun.fontSize) : undefined,
     lineHeight: firstRun?.leading ? pt(firstRun.leading) : undefined,
@@ -162,103 +181,84 @@ function ParagraphBlock({
     textIndent: block.firstLineIndent ? pt(block.firstLineIndent) : undefined,
   };
 
-  if (isEditing) {
-    function autoResize(el: HTMLTextAreaElement) {
-      el.style.height = 'auto';
-      el.style.height = el.scrollHeight + 'px';
-    }
-
-    return (
-      <textarea
-        ref={taRef}
-        defaultValue={block.text}
-        rows={1}
-        spellCheck={false}
-        onChange={e => {
-          autoResize(e.currentTarget);
-          onTextChange(e.currentTarget.value);
-        }}
-        onBlur={() => onEndEdit()}
-        onKeyDown={e => {
-          if (e.key === 'Escape') { e.preventDefault(); e.currentTarget.blur(); }
-        }}
-        onClick={e => e.stopPropagation()}
-        style={{
-          ...baseStyle,
-          display: 'block',
-          width: '100%',
-          margin: 0,
-          padding: 0,
-          border: 'none',
-          outline: '1px solid rgba(74,158,255,0.8)',
-          outlineOffset: '1px',
-          resize: 'none',
-          overflow: 'hidden',
-          background: 'transparent',
-          color: '#000',
-          whiteSpace: 'pre-wrap',
-          boxSizing: 'border-box',
-        }}
-      />
-    );
-  }
-
-  // Paragraph-level defaults from the dominant (first) run.
-  // Tracking is per-character only — never inherit it at the paragraph level
-  // or it contaminates spans that don't set their own letterSpacing.
-  const paraStyle: React.CSSProperties = {
-    ...baseStyle,
-    margin: 0,
-    marginTop: 0,
-    marginBottom: 0,
-    padding: 0,
-    whiteSpace: 'pre-wrap',
-    textAlignLast: block.justification === 'FullyJustified' ? 'justify' : undefined,
-    cursor: 'default',
-    outline: isSelected ? '1px solid rgba(74,158,255,0.5)' : 'none',
-    outlineOffset: '1px',
-  };
-
-  // Split text into segments at charRun boundaries and kerning positions.
+  // Build styled segments from charRuns + kerning pairs.
   const segments: { text: string; style: React.CSSProperties }[] = [];
-
   for (const run of block.charRuns) {
-    const runText = block.text.slice(run.start, run.end);
     const runStyle = charRunStyle(block, run.start, fontLookup);
-
-    const runKerns = block.kerningPairs.filter(
-      kp => kp.index >= run.start && kp.index < run.end
-    );
-
+    const runKerns = block.kerningPairs.filter(kp => kp.index >= run.start && kp.index < run.end);
     if (runKerns.length === 0) {
-      segments.push({ text: runText, style: runStyle });
+      segments.push({ text: block.text.slice(run.start, run.end), style: runStyle });
     } else {
       let pos = run.start;
       for (const kp of runKerns) {
-        if (kp.index > pos) {
-          segments.push({ text: block.text.slice(pos, kp.index), style: runStyle });
-        }
+        if (kp.index > pos) segments.push({ text: block.text.slice(pos, kp.index), style: runStyle });
         segments.push({
           text: block.text[kp.index] ?? '',
           style: { ...runStyle, display: 'inline-block', marginLeft: `${kp.value / 1000}em` },
         });
         pos = kp.index + 1;
       }
-      if (pos < run.end) {
-        segments.push({ text: block.text.slice(pos, run.end), style: runStyle });
-      }
+      if (pos < run.end) segments.push({ text: block.text.slice(pos, run.end), style: runStyle });
     }
+  }
+
+  if (isEditing) {
+    // contenteditable keeps the document look — styled spans stay visible, user
+    // can click anywhere and the selection drives the properties panel.
+    return (
+      <p
+        ref={ceRef}
+        contentEditable
+        suppressContentEditableWarning
+        spellCheck={false}
+        onBlur={e => {
+          // Strip any trailing newline browsers sometimes append.
+          const text = e.currentTarget.innerText.replace(/\n$/, '');
+          onTextChange(text);
+          onEndEdit();
+        }}
+        onKeyDown={e => {
+          if (e.key === 'Escape') { e.preventDefault(); e.currentTarget.blur(); }
+          // Let the browser insert a literal \n (soft return) on Enter rather
+          // than splitting into a new block element.
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            document.execCommand('insertText', false, '\n');
+          }
+        }}
+        onClick={e => e.stopPropagation()}
+        style={{
+          ...sharedStyle,
+          margin: 0, marginTop: 0, marginBottom: 0,
+          padding: 0,
+          whiteSpace: 'pre-wrap',
+          textAlignLast: block.justification === 'FullyJustified' ? 'justify' : undefined,
+          outline: '1px solid rgba(74,158,255,0.8)',
+          outlineOffset: '1px',
+          cursor: 'text',
+        }}
+      >
+        {segments.map((seg, i) => <span key={i} style={seg.style}>{seg.text}</span>)}
+      </p>
+    );
   }
 
   return (
     <p
-      style={paraStyle}
+      style={{
+        ...sharedStyle,
+        margin: 0, marginTop: 0, marginBottom: 0,
+        padding: 0,
+        whiteSpace: 'pre-wrap',
+        textAlignLast: block.justification === 'FullyJustified' ? 'justify' : undefined,
+        cursor: 'default',
+        outline: isSelected ? '1px solid rgba(74,158,255,0.5)' : 'none',
+        outlineOffset: '1px',
+      }}
       onClick={e => { e.stopPropagation(); onSelect(); }}
       onDoubleClick={e => { e.stopPropagation(); onStartEdit(); }}
     >
-      {segments.map((seg, i) => (
-        <span key={i} style={seg.style}>{seg.text}</span>
-      ))}
+      {segments.map((seg, i) => <span key={i} style={seg.style}>{seg.text}</span>)}
     </p>
   );
 }
@@ -268,7 +268,7 @@ function ParagraphBlock({
 type Selection = { storyId: string; blockIndex: number } | null;
 
 function FrameView({
-  frame, localX, localY, story, selection, editing, onSelect, onStartEdit, onTextChange, onEndEdit, fontLookup,
+  frame, localX, localY, story, selection, editing, onSelect, onStartEdit, onSelectionChange, onTextChange, onEndEdit, fontLookup,
 }: {
   frame: Frame;
   localX: number;
@@ -278,6 +278,7 @@ function FrameView({
   editing: Selection;
   onSelect: (storyId: string, blockIndex: number) => void;
   onStartEdit: (storyId: string, blockIndex: number) => void;
+  onSelectionChange: (start: number, end: number) => void;
   onTextChange: (text: string) => void;
   onEndEdit: () => void;
   fontLookup: FontLookup;
@@ -302,6 +303,7 @@ function FrameView({
           isEditing={editing?.storyId === story.id && editing?.blockIndex === i}
           onSelect={() => onSelect(story.id, i)}
           onStartEdit={() => onStartEdit(story.id, i)}
+          onSelectionChange={onSelectionChange}
           onTextChange={onTextChange}
           onEndEdit={onEndEdit}
           fontLookup={fontLookup}
@@ -314,7 +316,7 @@ function FrameView({
 // ---- page -------------------------------------------------------------------
 
 export function PageView({
-  page, frames, stories, selection, editing, onSelect, onStartEdit, onTextChange, onEndEdit,
+  page, frames, stories, selection, editing, onSelect, onStartEdit, onSelectionChange, onTextChange, onEndEdit,
 }: {
   page: Page;
   frames: Frame[];
@@ -323,6 +325,7 @@ export function PageView({
   editing: Selection;
   onSelect: (storyId: string, blockIndex: number) => void;
   onStartEdit: (storyId: string, blockIndex: number) => void;
+  onSelectionChange: (start: number, end: number) => void;
   onTextChange: (text: string) => void;
   onEndEdit: () => void;
 }) {
@@ -368,6 +371,7 @@ export function PageView({
             editing={editing}
             onSelect={onSelect}
             onStartEdit={onStartEdit}
+            onSelectionChange={onSelectionChange}
             onTextChange={onTextChange}
             onEndEdit={onEndEdit}
             fontLookup={fontLookup}
