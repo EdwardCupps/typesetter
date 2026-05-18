@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useRef, useMemo, useState } from 'react';
 import type { ContentBlock, Frame, Page, Story } from '../../shared/types';
 
 // CSS pt units map directly to InDesign pt values — no conversion needed.
@@ -126,34 +126,94 @@ function justificationToTextAlign(j: string | undefined): React.CSSProperties['t
 }
 
 function ParagraphBlock({
-  block, isSelected, onSelect, fontLookup,
+  block, isSelected, isEditing, onSelect, onStartEdit, onTextChange, onEndEdit, fontLookup,
 }: {
   block: ContentBlock;
   isSelected: boolean;
+  isEditing: boolean;
   onSelect: () => void;
+  onStartEdit: () => void;
+  onTextChange: (text: string) => void;
+  onEndEdit: () => void;
   fontLookup: FontLookup;
 }) {
   const firstRun = block.charRuns[0];
   const firstCssFamily = firstRun?.fontFamily
     ? (fontLookup.get(firstRun.fontFamily) ?? firstRun.fontFamily)
     : undefined;
+  const taRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (isEditing && taRef.current) {
+      taRef.current.focus();
+      // Place cursor at end
+      const len = taRef.current.value.length;
+      taRef.current.setSelectionRange(len, len);
+    }
+  }, [isEditing]);
+
+  // Shared font/layout style used by both the <p> and the editing <textarea>.
+  const baseStyle: React.CSSProperties = {
+    fontFamily: firstCssFamily ? `'${firstCssFamily}'` : undefined,
+    fontSize: firstRun?.fontSize ? pt(firstRun.fontSize) : undefined,
+    lineHeight: firstRun?.leading ? pt(firstRun.leading) : undefined,
+    textAlign: justificationToTextAlign(block.justification),
+    paddingLeft: block.leftIndent ? pt(block.leftIndent) : undefined,
+    textIndent: block.firstLineIndent ? pt(block.firstLineIndent) : undefined,
+  };
+
+  if (isEditing) {
+    function autoResize(el: HTMLTextAreaElement) {
+      el.style.height = 'auto';
+      el.style.height = el.scrollHeight + 'px';
+    }
+
+    return (
+      <textarea
+        ref={taRef}
+        defaultValue={block.text}
+        rows={1}
+        spellCheck={false}
+        onChange={e => {
+          autoResize(e.currentTarget);
+          onTextChange(e.currentTarget.value);
+        }}
+        onBlur={() => onEndEdit()}
+        onKeyDown={e => {
+          if (e.key === 'Escape') { e.preventDefault(); e.currentTarget.blur(); }
+        }}
+        onClick={e => e.stopPropagation()}
+        style={{
+          ...baseStyle,
+          display: 'block',
+          width: '100%',
+          margin: 0,
+          padding: 0,
+          border: 'none',
+          outline: '1px solid rgba(74,158,255,0.8)',
+          outlineOffset: '1px',
+          resize: 'none',
+          overflow: 'hidden',
+          background: 'transparent',
+          color: '#000',
+          whiteSpace: 'pre-wrap',
+          boxSizing: 'border-box',
+        }}
+      />
+    );
+  }
 
   // Paragraph-level defaults from the dominant (first) run.
   // Tracking is per-character only — never inherit it at the paragraph level
   // or it contaminates spans that don't set their own letterSpacing.
   const paraStyle: React.CSSProperties = {
+    ...baseStyle,
     margin: 0,
     marginTop: 0,
     marginBottom: 0,
     padding: 0,
     whiteSpace: 'pre-wrap',
-    textAlign: justificationToTextAlign(block.justification),
     textAlignLast: block.justification === 'FullyJustified' ? 'justify' : undefined,
-    paddingLeft: block.leftIndent ? pt(block.leftIndent) : undefined,
-    textIndent: block.firstLineIndent ? pt(block.firstLineIndent) : undefined,
-    fontFamily: firstCssFamily ? `'${firstCssFamily}'` : undefined,
-    fontSize: firstRun?.fontSize ? pt(firstRun.fontSize) : undefined,
-    lineHeight: firstRun?.leading ? pt(firstRun.leading) : undefined,
     cursor: 'default',
     outline: isSelected ? '1px solid rgba(74,158,255,0.5)' : 'none',
     outlineOffset: '1px',
@@ -191,7 +251,11 @@ function ParagraphBlock({
   }
 
   return (
-    <p style={paraStyle} onClick={e => { e.stopPropagation(); onSelect(); }}>
+    <p
+      style={paraStyle}
+      onClick={e => { e.stopPropagation(); onSelect(); }}
+      onDoubleClick={e => { e.stopPropagation(); onStartEdit(); }}
+    >
       {segments.map((seg, i) => (
         <span key={i} style={seg.style}>{seg.text}</span>
       ))}
@@ -204,14 +268,18 @@ function ParagraphBlock({
 type Selection = { storyId: string; blockIndex: number } | null;
 
 function FrameView({
-  frame, localX, localY, story, selection, onSelect, fontLookup,
+  frame, localX, localY, story, selection, editing, onSelect, onStartEdit, onTextChange, onEndEdit, fontLookup,
 }: {
   frame: Frame;
   localX: number;
   localY: number;
   story: Story;
   selection: Selection;
+  editing: Selection;
   onSelect: (storyId: string, blockIndex: number) => void;
+  onStartEdit: (storyId: string, blockIndex: number) => void;
+  onTextChange: (text: string) => void;
+  onEndEdit: () => void;
   fontLookup: FontLookup;
 }) {
   const cols = frame.columnCount > 1 ? frame.columnCount : undefined;
@@ -231,7 +299,11 @@ function FrameView({
           key={i}
           block={block}
           isSelected={selection?.storyId === story.id && selection?.blockIndex === i}
+          isEditing={editing?.storyId === story.id && editing?.blockIndex === i}
           onSelect={() => onSelect(story.id, i)}
+          onStartEdit={() => onStartEdit(story.id, i)}
+          onTextChange={onTextChange}
+          onEndEdit={onEndEdit}
           fontLookup={fontLookup}
         />
       ))}
@@ -242,13 +314,17 @@ function FrameView({
 // ---- page -------------------------------------------------------------------
 
 export function PageView({
-  page, frames, stories, selection, onSelect,
+  page, frames, stories, selection, editing, onSelect, onStartEdit, onTextChange, onEndEdit,
 }: {
   page: Page;
   frames: Frame[];
   stories: Story[];
   selection: Selection;
+  editing: Selection;
   onSelect: (storyId: string, blockIndex: number) => void;
+  onStartEdit: (storyId: string, blockIndex: number) => void;
+  onTextChange: (text: string) => void;
+  onEndEdit: () => void;
 }) {
   const fontLookup = useFontLookup(stories);
   const pageFrames = frames.filter(f => f.spreadId === page.spreadId);
@@ -289,7 +365,11 @@ export function PageView({
             localY={localY}
             story={story}
             selection={selection}
+            editing={editing}
             onSelect={onSelect}
+            onStartEdit={onStartEdit}
+            onTextChange={onTextChange}
+            onEndEdit={onEndEdit}
             fontLookup={fontLookup}
           />
         );
