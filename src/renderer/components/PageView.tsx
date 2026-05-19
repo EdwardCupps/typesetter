@@ -1,14 +1,9 @@
 import React, { useEffect, useRef, useMemo, useState } from 'react';
 import type { ContentBlock, Frame, Page, Story } from '../../shared/types';
 
-// CSS pt units map directly to InDesign pt values — no conversion needed.
 const pt = (n: number) => `${n}pt`;
 
 // ---- font face injection ----------------------------------------------------
-// We resolve each IDML font name to a PostScript name via the Font Access API,
-// then inject @font-face rules that reference the exact face via local().
-// This sidesteps CSS family-name ambiguity (e.g. "Frutiger CE 65 Bold" may not
-// be a registered CSS family; its PostScript name "FrutigerCE-Bold" always is).
 
 interface FontData {
   family: string;
@@ -20,12 +15,9 @@ declare global {
   interface Window { queryLocalFonts?: () => Promise<FontData[]>; }
 }
 
-// Map from IDML fontFamily string → synthetic CSS family name (based on PS name)
 type FontLookup = Map<string, string>;
 
-function syntheticName(psName: string) {
-  return `__ts_${psName}`;
-}
+function syntheticName(psName: string) { return `__ts_${psName}`; }
 
 function useFontLookup(stories: Story[]): FontLookup {
   const [allFonts, setAllFonts] = useState<FontData[]>([]);
@@ -53,16 +45,11 @@ function useFontLookup(stories: Story[]): FontLookup {
     return map;
   }, [allFonts, stories]);
 
-  // Inject @font-face rules whenever the lookup changes.
   useEffect(() => {
     const rules: string[] = [];
     for (const [, cssFamily] of lookup) {
       const psName = cssFamily.slice('__ts_'.length);
-      // font-weight/style are intentionally "normal" — the @font-face pins the
-      // exact variant, so we never need CSS weight/style synthesis on top.
-      rules.push(
-        `@font-face{font-family:'${cssFamily}';src:local('${psName}');font-weight:normal;font-style:normal;}`
-      );
+      rules.push(`@font-face{font-family:'${cssFamily}';src:local('${psName}');font-weight:normal;font-style:normal;}`);
     }
     let el = document.getElementById('__ts_fontfaces');
     if (!el) {
@@ -78,11 +65,7 @@ function useFontLookup(stories: Story[]): FontLookup {
 
 // ---- text rendering ---------------------------------------------------------
 
-function charRunStyle(
-  block: ContentBlock,
-  charIndex: number,
-  fontLookup: FontLookup,
-): React.CSSProperties {
+function charRunStyle(block: ContentBlock, charIndex: number, fontLookup: FontLookup): React.CSSProperties {
   const run = block.charRuns.find(r => charIndex >= r.start && charIndex < r.end);
   if (!run) return {};
   const style: React.CSSProperties = {};
@@ -90,13 +73,8 @@ function charRunStyle(
   if (run.fontFamily) {
     const cssFamily = fontLookup.get(run.fontFamily);
     if (cssFamily) {
-      // Synthetic @font-face family — exact variant, no weight/style needed.
       style.fontFamily = `'${cssFamily}'`;
     } else {
-      // Font Access API unavailable or font not found — fall back to IDML name
-      // and apply weight/style heuristics. We only set font-weight/style when
-      // the family name doesn't already encode the variant, to avoid browser
-      // synthesis doubling the weight on faces like "Frutiger CE 65 Bold".
       style.fontFamily = `'${run.fontFamily}'`;
       const nameHasWeight = /bold|light|medium|black|heavy|thin|ultra|condensed/i.test(run.fontFamily);
       const nameHasStyle  = /italic|oblique/i.test(run.fontFamily);
@@ -104,8 +82,7 @@ function charRunStyle(
       if (!nameHasStyle && (run.fontVariant === 'Italic' || run.fontVariant?.includes('Italic')))
         style.fontStyle = 'italic';
       if (!nameHasWeight && !nameHasStyle && run.fontVariant === 'Bold Italic') {
-        style.fontWeight = 'bold';
-        style.fontStyle = 'italic';
+        style.fontWeight = 'bold'; style.fontStyle = 'italic';
       }
     }
   }
@@ -125,63 +102,21 @@ function justificationToTextAlign(j: string | undefined): React.CSSProperties['t
   }
 }
 
-// Get the character offset of a DOM node+offset relative to a container element.
-function charOffsetOf(container: Node, node: Node, offset: number): number {
-  const range = document.createRange();
-  range.setStart(container, 0);
-  range.setEnd(node, offset);
-  return range.toString().length;
-}
+// ---- paragraph --------------------------------------------------------------
 
 function ParagraphBlock({
-  block, isSelected, isEditing, onSelect, onStartEdit, onSelectionChange, onTextChange, onEndEdit, fontLookup,
+  block, blockIndex, isSelected, fontLookup,
 }: {
   block: ContentBlock;
+  blockIndex: number;
   isSelected: boolean;
-  isEditing: boolean;
-  onSelect: () => void;
-  onStartEdit: () => void;
-  onSelectionChange: (start: number, end: number) => void;
-  onTextChange: (text: string) => void;
-  onEndEdit: () => void;
   fontLookup: FontLookup;
 }) {
   const firstRun = block.charRuns[0];
   const firstCssFamily = firstRun?.fontFamily
     ? (fontLookup.get(firstRun.fontFamily) ?? firstRun.fontFamily)
     : undefined;
-  const ceRef = useRef<HTMLParagraphElement>(null);
 
-  // Track text selection to drive the properties panel.
-  useEffect(() => {
-    if (!isEditing) return;
-    function onSelChange() {
-      const sel = window.getSelection();
-      if (!sel || !ceRef.current) return;
-      const anchor = sel.anchorNode;
-      const focus = sel.focusNode;
-      if (!anchor || !ceRef.current.contains(anchor)) return;
-      const a = charOffsetOf(ceRef.current, anchor, sel.anchorOffset);
-      const f = focus && ceRef.current.contains(focus)
-        ? charOffsetOf(ceRef.current, focus, sel.focusOffset)
-        : a;
-      onSelectionChange(Math.min(a, f), Math.max(a, f));
-    }
-    document.addEventListener('selectionchange', onSelChange);
-    return () => document.removeEventListener('selectionchange', onSelChange);
-  }, [isEditing, onSelectionChange]);
-
-  // Shared layout properties (font, size, alignment, indents).
-  const sharedStyle: React.CSSProperties = {
-    fontFamily: firstCssFamily ? `'${firstCssFamily}'` : undefined,
-    fontSize: firstRun?.fontSize ? pt(firstRun.fontSize) : undefined,
-    lineHeight: firstRun?.leading ? pt(firstRun.leading) : undefined,
-    textAlign: justificationToTextAlign(block.justification),
-    paddingLeft: block.leftIndent ? pt(block.leftIndent) : undefined,
-    textIndent: block.firstLineIndent ? pt(block.firstLineIndent) : undefined,
-  };
-
-  // Build styled segments from charRuns + kerning pairs.
   const segments: { text: string; style: React.CSSProperties }[] = [];
   for (const run of block.charRuns) {
     const runStyle = charRunStyle(block, run.start, fontLookup);
@@ -202,61 +137,22 @@ function ParagraphBlock({
     }
   }
 
-  if (isEditing) {
-    // contenteditable keeps the document look — styled spans stay visible, user
-    // can click anywhere and the selection drives the properties panel.
-    return (
-      <p
-        ref={ceRef}
-        contentEditable
-        suppressContentEditableWarning
-        spellCheck={false}
-        onBlur={e => {
-          // Strip any trailing newline browsers sometimes append.
-          const text = e.currentTarget.innerText.replace(/\n$/, '');
-          onTextChange(text);
-          onEndEdit();
-        }}
-        onKeyDown={e => {
-          if (e.key === 'Escape') { e.preventDefault(); e.currentTarget.blur(); }
-          // Let the browser insert a literal \n (soft return) on Enter rather
-          // than splitting into a new block element.
-          if (e.key === 'Enter') {
-            e.preventDefault();
-            document.execCommand('insertText', false, '\n');
-          }
-        }}
-        onClick={e => e.stopPropagation()}
-        style={{
-          ...sharedStyle,
-          margin: 0, marginTop: 0, marginBottom: 0,
-          padding: 0,
-          whiteSpace: 'pre-wrap',
-          textAlignLast: block.justification === 'FullyJustified' ? 'justify' : undefined,
-          outline: '1px solid rgba(74,158,255,0.8)',
-          outlineOffset: '1px',
-          cursor: 'text',
-        }}
-      >
-        {segments.map((seg, i) => <span key={i} style={seg.style}>{seg.text}</span>)}
-      </p>
-    );
-  }
-
   return (
     <p
+      data-block-index={blockIndex}
       style={{
-        ...sharedStyle,
-        margin: 0, marginTop: 0, marginBottom: 0,
-        padding: 0,
-        whiteSpace: 'pre-wrap',
+        fontFamily: firstCssFamily ? `'${firstCssFamily}'` : undefined,
+        fontSize: firstRun?.fontSize ? pt(firstRun.fontSize) : undefined,
+        lineHeight: firstRun?.leading ? pt(firstRun.leading) : undefined,
+        textAlign: justificationToTextAlign(block.justification),
         textAlignLast: block.justification === 'FullyJustified' ? 'justify' : undefined,
-        cursor: 'default',
-        outline: isSelected ? '1px solid rgba(74,158,255,0.5)' : 'none',
+        paddingLeft: block.leftIndent ? pt(block.leftIndent) : undefined,
+        textIndent: block.firstLineIndent ? pt(block.firstLineIndent) : undefined,
+        margin: 0, marginTop: 0, marginBottom: 0, padding: 0,
+        whiteSpace: 'pre-wrap',
+        outline: isSelected ? '1px solid rgba(74,158,255,0.35)' : 'none',
         outlineOffset: '1px',
       }}
-      onClick={e => { e.stopPropagation(); onSelect(); }}
-      onDoubleClick={e => { e.stopPropagation(); onStartEdit(); }}
     >
       {segments.map((seg, i) => <span key={i} style={seg.style}>{seg.text}</span>)}
     </p>
@@ -264,48 +160,99 @@ function ParagraphBlock({
 }
 
 // ---- frame ------------------------------------------------------------------
+// The frame div is one contenteditable region. All paragraphs inside are
+// editable as a unit. selectionchange tracks which paragraph has the cursor.
 
 type Selection = { storyId: string; blockIndex: number } | null;
 
+function charOffsetOf(container: Node, node: Node, offset: number): number {
+  const range = document.createRange();
+  range.setStart(container, 0);
+  range.setEnd(node, offset);
+  return range.toString().length;
+}
+
 function FrameView({
-  frame, localX, localY, story, selection, editing, onSelect, onStartEdit, onSelectionChange, onTextChange, onEndEdit, fontLookup,
+  frame, localX, localY, story, selection, fontLookup,
+  onBlockFocus, onSelectionChange, onBlockTextChange,
 }: {
   frame: Frame;
   localX: number;
   localY: number;
   story: Story;
   selection: Selection;
-  editing: Selection;
-  onSelect: (storyId: string, blockIndex: number) => void;
-  onStartEdit: (storyId: string, blockIndex: number) => void;
-  onSelectionChange: (start: number, end: number) => void;
-  onTextChange: (text: string) => void;
-  onEndEdit: () => void;
   fontLookup: FontLookup;
+  onBlockFocus: (storyId: string, blockIndex: number) => void;
+  onSelectionChange: (start: number, end: number) => void;
+  onBlockTextChange: (storyId: string, blockIndex: number, newText: string) => void;
 }) {
+  const frameRef = useRef<HTMLDivElement>(null);
   const cols = frame.columnCount > 1 ? frame.columnCount : undefined;
+
+  // One selectionchange listener handles all paragraphs in this frame.
+  useEffect(() => {
+    function onSel() {
+      const sel = window.getSelection();
+      if (!sel || !frameRef.current) return;
+      const anchor = sel.anchorNode;
+      if (!anchor || !frameRef.current.contains(anchor)) return;
+
+      // Walk up from anchor to find the <p data-block-index>.
+      let node: Node | null = anchor;
+      while (node && node !== frameRef.current) {
+        if (node instanceof HTMLElement && node.dataset.blockIndex !== undefined) {
+          const blockIndex = parseInt(node.dataset.blockIndex);
+          const a = charOffsetOf(node, anchor, sel.anchorOffset);
+          const f = sel.focusNode && node.contains(sel.focusNode)
+            ? charOffsetOf(node, sel.focusNode, sel.focusOffset)
+            : a;
+          onBlockFocus(story.id, blockIndex);
+          onSelectionChange(Math.min(a, f), Math.max(a, f));
+          return;
+        }
+        node = node.parentNode;
+      }
+    }
+    document.addEventListener('selectionchange', onSel);
+    return () => document.removeEventListener('selectionchange', onSel);
+  }, [story.id, onBlockFocus, onSelectionChange]);
+
   return (
-    <div style={{
-      position: 'absolute',
-      left: pt(localX),
-      top: pt(localY),
-      width: pt(frame.width),
-      height: pt(frame.height),
-      overflow: 'visible',
-      boxSizing: 'border-box',
-      ...(cols ? { columnCount: cols, columnGap: pt(frame.columnGutter) } : {}),
-    }}>
+    <div
+      ref={frameRef}
+      contentEditable
+      suppressContentEditableWarning
+      spellCheck={false}
+      style={{
+        position: 'absolute',
+        left: pt(localX), top: pt(localY),
+        width: pt(frame.width), height: pt(frame.height),
+        overflow: 'visible',
+        boxSizing: 'border-box',
+        outline: 'none',
+        ...(cols ? { columnCount: cols, columnGap: pt(frame.columnGutter) } : {}),
+      }}
+      onClick={e => e.stopPropagation()}
+      onBlur={e => {
+        if (frameRef.current?.contains(e.relatedTarget as Node)) return;
+        frameRef.current?.querySelectorAll<HTMLElement>('[data-block-index]').forEach(el => {
+          onBlockTextChange(story.id, parseInt(el.dataset.blockIndex!), el.innerText.replace(/\n$/, ''));
+        });
+      }}
+      onKeyDown={e => {
+        if (e.key === 'Escape') { e.preventDefault(); e.currentTarget.blur(); }
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          document.execCommand('insertText', false, '\n');
+        }
+      }}
+    >
       {story.content.map((block, i) => (
         <ParagraphBlock
           key={i}
           block={block}
+          blockIndex={i}
           isSelected={selection?.storyId === story.id && selection?.blockIndex === i}
-          isEditing={editing?.storyId === story.id && editing?.blockIndex === i}
-          onSelect={() => onSelect(story.id, i)}
-          onStartEdit={() => onStartEdit(story.id, i)}
-          onSelectionChange={onSelectionChange}
-          onTextChange={onTextChange}
-          onEndEdit={onEndEdit}
           fontLookup={fontLookup}
         />
       ))}
@@ -316,18 +263,16 @@ function FrameView({
 // ---- page -------------------------------------------------------------------
 
 export function PageView({
-  page, frames, stories, selection, editing, onSelect, onStartEdit, onSelectionChange, onTextChange, onEndEdit,
+  page, frames, stories, selection, onPageClick, onBlockFocus, onSelectionChange, onBlockTextChange,
 }: {
   page: Page;
   frames: Frame[];
   stories: Story[];
   selection: Selection;
-  editing: Selection;
-  onSelect: (storyId: string, blockIndex: number) => void;
-  onStartEdit: (storyId: string, blockIndex: number) => void;
+  onPageClick: () => void;
+  onBlockFocus: (storyId: string, blockIndex: number) => void;
   onSelectionChange: (start: number, end: number) => void;
-  onTextChange: (text: string) => void;
-  onEndEdit: () => void;
+  onBlockTextChange: (storyId: string, blockIndex: number, newText: string) => void;
 }) {
   const fontLookup = useFontLookup(stories);
   const pageFrames = frames.filter(f => f.spreadId === page.spreadId);
@@ -342,9 +287,8 @@ export function PageView({
         boxShadow: '0 4px 24px rgba(0,0,0,0.35)',
         flexShrink: 0,
       }}
-      onClick={() => onSelect('', -1)}
+      onClick={onPageClick}
     >
-      {/* Margin guide */}
       <div style={{
         position: 'absolute',
         top: pt(page.margins.top),
@@ -358,23 +302,18 @@ export function PageView({
       {pageFrames.map(frame => {
         const story = stories.find(s => s.id === frame.storyId);
         if (!story) return null;
-        const localX = frame.x - page.transform.tx;
-        const localY = frame.y - page.transform.ty;
         return (
           <FrameView
             key={frame.id}
             frame={frame}
-            localX={localX}
-            localY={localY}
+            localX={frame.x - page.transform.tx}
+            localY={frame.y - page.transform.ty}
             story={story}
             selection={selection}
-            editing={editing}
-            onSelect={onSelect}
-            onStartEdit={onStartEdit}
-            onSelectionChange={onSelectionChange}
-            onTextChange={onTextChange}
-            onEndEdit={onEndEdit}
             fontLookup={fontLookup}
+            onBlockFocus={onBlockFocus}
+            onSelectionChange={onSelectionChange}
+            onBlockTextChange={onBlockTextChange}
           />
         );
       })}

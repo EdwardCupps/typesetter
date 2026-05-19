@@ -56,8 +56,6 @@ function applyTextEdit(block: ContentBlock, newText: string): ContentBlock {
   return { ...block, text: newText, charRuns: newRuns, kerningPairs: newKerning };
 }
 
-// Apply a style update to charRuns that overlap [selStart, selEnd).
-// Runs that partially overlap are split at the selection boundary.
 function applyStyleToRange(
   block: ContentBlock,
   selStart: number,
@@ -86,14 +84,11 @@ export default function App() {
   const [doc, setDoc] = useState<ParsedDocument | null>(null);
   const [loading, setLoading] = useState(false);
   const [selection, setSelection] = useState<Selection>(null);
-  const [editing, setEditing] = useState<Selection>(null);
-  // Char range of the current text selection within the editing block.
   const [editSel, setEditSel] = useState<{ start: number; end: number } | null>(null);
 
   async function handleImport() {
     setLoading(true);
     setSelection(null);
-    setEditing(null);
     setEditSel(null);
     try {
       const result = await window.typesetter.idml.parse();
@@ -103,29 +98,15 @@ export default function App() {
     }
   }
 
-  function handleSelect(storyId: string, blockIndex: number) {
-    if (blockIndex === -1) {
-      setSelection(null);
-      setEditing(null);
-      setEditSel(null);
-    } else {
-      setSelection({ storyId, blockIndex });
-    }
-  }
-
-  function handleStartEdit(storyId: string, blockIndex: number) {
+  function handleBlockFocus(storyId: string, blockIndex: number) {
     setSelection({ storyId, blockIndex });
-    setEditing({ storyId, blockIndex });
-    setEditSel(null);
   }
 
   function handleSelectionChange(start: number, end: number) {
     setEditSel({ start, end });
   }
 
-  function handleTextChange(newText: string) {
-    if (!editing) return;
-    const { storyId, blockIndex } = editing;
+  function handleBlockTextChange(storyId: string, blockIndex: number, newText: string) {
     setDoc(prev => {
       if (!prev) return prev;
       return {
@@ -139,8 +120,8 @@ export default function App() {
     });
   }
 
-  function handleEndEdit() {
-    setEditing(null);
+  function handlePageClick() {
+    setSelection(null);
     setEditSel(null);
   }
 
@@ -172,11 +153,9 @@ export default function App() {
                 ...s,
                 content: s.content.map((b, i) => {
                   if (i !== blockIndex) return b;
-                  // If there's a real text selection, apply to that range.
                   if (editSel && editSel.start < editSel.end) {
                     return applyStyleToRange(b, editSel.start, editSel.end, update);
                   }
-                  // Otherwise apply to all runs matching the reference run's font+size.
                   const ref = refRun ?? b.charRuns[0];
                   return {
                     ...b,
@@ -198,14 +177,11 @@ export default function App() {
     ? (doc.stories.find(s => s.id === selection.storyId)?.content[selection.blockIndex] ?? null)
     : null;
 
-  // The charRun under the text cursor (when editing) drives the panel display.
   const cursorCharStart = editSel?.start ?? null;
-
   const page1 = doc?.pages[0] ?? null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: '#2a2a2a' }}>
-      {/* Toolbar */}
       <div style={{
         display: 'flex', alignItems: 'center', gap: 12,
         padding: '8px 16px', background: '#1a1a1a',
@@ -232,7 +208,6 @@ export default function App() {
         </button>
       </div>
 
-      {/* Canvas + panel */}
       <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
         <div style={{
           flex: 1, overflow: 'auto',
@@ -245,12 +220,10 @@ export default function App() {
               frames={doc!.frames}
               stories={doc!.stories}
               selection={selection}
-              editing={editing}
-              onSelect={handleSelect}
-              onStartEdit={handleStartEdit}
+              onPageClick={handlePageClick}
+              onBlockFocus={handleBlockFocus}
               onSelectionChange={handleSelectionChange}
-              onTextChange={handleTextChange}
-              onEndEdit={handleEndEdit}
+              onBlockTextChange={handleBlockTextChange}
             />
           ) : (
             <div style={{
