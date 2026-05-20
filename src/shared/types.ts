@@ -22,6 +22,9 @@ export interface ContentBlock {
   justification?: string;
   leftIndent?: number;      // pt
   firstLineIndent?: number; // pt (negative = hanging)
+  spaceBefore?: number;     // pt
+  spaceAfter?: number;      // pt
+  autoBullet?: string;      // bullet char prepended at render time (from paragraph style list settings)
   kerningPairs: KerningPair[];
   charRuns: CharRun[];
 }
